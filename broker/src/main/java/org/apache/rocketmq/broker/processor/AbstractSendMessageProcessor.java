@@ -368,6 +368,16 @@ public abstract class AbstractSendMessageProcessor extends AsyncNettyRequestProc
         if (s != null) {
             r.setM(Boolean.parseBoolean(s));
         }
+
+        s = fields.get("n");
+        if (s != null) {
+            r.setN(Boolean.parseBoolean(s));
+        }
+
+        s = fields.get("q");
+        if (s != null) {
+            r.setQ(s);
+        }
         return r;
     }
 

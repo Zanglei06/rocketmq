@@ -1246,16 +1246,13 @@ public class CommitLog {
     class DefaultAppendMessageCallback implements AppendMessageCallback {
         // File at the end of the minimum fixed length empty
         private static final int END_FILE_MIN_BLANK_LENGTH = 4 + 4;
-        private final ByteBuffer msgIdMemory;
-        private final ByteBuffer msgIdV6Memory;
         // Store the message content
         private final ByteBuffer msgStoreItemMemory;
         // The maximum length of the message
         private final int maxMessageSize;
+        private final StringBuilder keyBuilder = new StringBuilder();
 
         DefaultAppendMessageCallback(final int size) {
-            this.msgIdMemory = ByteBuffer.allocate(4 + 4 + 8);
-            this.msgIdV6Memory = ByteBuffer.allocate(16 + 4 + 8);
             this.msgStoreItemMemory = ByteBuffer.allocate(END_FILE_MIN_BLANK_LENGTH);
             this.maxMessageSize = size;
         }
@@ -1357,6 +1354,9 @@ public class CommitLog {
 
         public AppendMessageResult doAppend(final long fileFromOffset, final ByteBuffer byteBuffer, final int maxBlank,
             final MessageExtBatch messageExtBatch, PutMessageContext putMessageContext) {
+            if (messageExtBatch.isMultiTopic()) {
+                return doAppendMultiTopic(fileFromOffset, byteBuffer, maxBlank, messageExtBatch, putMessageContext);
+            }
             byteBuffer.mark();
             //physical offset
             long wroteOffset = fileFromOffset + byteBuffer.position();
@@ -1453,6 +1453,104 @@ public class CommitLog {
             CommitLog.this.topicQueueTable.put(key, queueOffset);
 
             return result;
+        }
+
+        private AppendMessageResult doAppendMultiTopic(final long fileFromOffset, final ByteBuffer byteBuffer, final int maxBlank,
+                                                       final MessageExtBatch messageExtBatch, PutMessageContext putMessageContext) {
+            //physical offset
+            long wroteOffset = fileFromOffset + byteBuffer.position();
+
+            int totalMsgLen = 0;
+            int msgNum = 0;
+            byteBuffer.mark();
+
+            final long beginTimeMills = CommitLog.this.defaultMessageStore.now();
+            ByteBuffer messageByteBuff = messageExtBatch.getEncodedBuff();
+            messageByteBuff.mark();
+
+            int sysFlag = messageExtBatch.getSysFlag();
+            int bornHostLength = (sysFlag & MessageSysFlag.BORNHOST_V6_FLAG) == 0 ? 4 + 4 : 16 + 4;
+            int storeHostLength = (sysFlag & MessageSysFlag.STOREHOSTADDRESS_V6_FLAG) == 0 ? 4 + 4 : 16 + 4;
+            Supplier<String> msgIdSuppiler = () -> {
+                int msgIdLen = storeHostLength + 8;
+                int batchCount = putMessageContext.getBatchSize();
+                long[] phyPosArray = putMessageContext.getPhyPos();
+                ByteBuffer msgIdBuffer = ByteBuffer.allocate(msgIdLen);
+                MessageExt.socketAddress2ByteBuffer(messageExtBatch.getStoreHost(), msgIdBuffer);
+                msgIdBuffer.clear();
+                StringBuilder buffer = new StringBuilder(batchCount * msgIdLen * 2 + batchCount - 1);
+                for (int i = 0; i < phyPosArray.length; i++) {
+                    msgIdBuffer.putLong(msgIdLen - 8, phyPosArray[i]);
+                    String msgId = UtilAll.bytes2string(msgIdBuffer.array());
+                    if (i != 0) {
+                        buffer.append(',');
+                    }
+                    buffer.append(msgId);
+                }
+                return buffer.toString();
+            };
+
+            int index = 0;
+            while (messageByteBuff.hasRemaining()) {
+                final int msgPos = messageByteBuff.position();
+                final int msgLen = messageByteBuff.getInt();
+                final int bodyLen = msgLen - 40; // for log only.
+                if (msgLen > this.maxMessageSize) {
+                    CommitLog.log.warn("message size exceeded, msg total size: " + msgLen + ", msg body size: " + bodyLen
+                            + ", maxMessageSize: " + this.maxMessageSize);
+                    return new AppendMessageResult(AppendMessageStatus.MESSAGE_SIZE_EXCEEDED);
+                }
+                totalMsgLen += msgLen;
+                if (totalMsgLen + END_FILE_MIN_BLANK_LENGTH > maxBlank) {
+                    this.msgStoreItemMemory.clear();
+                    this.msgStoreItemMemory.putInt(maxBlank);
+                    this.msgStoreItemMemory.putInt(CommitLog.BLANK_MAGIC_CODE);
+                    messageByteBuff.reset();
+                    byteBuffer.reset();
+                    byteBuffer.put(this.msgStoreItemMemory.array(), 0, 8);
+                    return new AppendMessageResult(AppendMessageStatus.END_OF_FILE, wroteOffset, maxBlank, msgIdSuppiler, messageExtBatch.getStoreTimestamp(),
+                            0, CommitLog.this.defaultMessageStore.now() - beginTimeMills);
+                }
+
+                messageByteBuff.position(msgPos + 12); // move to queueId
+                int queueId = messageByteBuff.getInt();
+                messageByteBuff.position(msgPos + 20); // move to topic_index(queueOffset)
+                int topicIndex = (int)messageByteBuff.getLong();
+                String topic = messageExtBatch.getTopics()[topicIndex];
+
+                // move to add queue offset and commitlog offset
+                messageByteBuff.position(msgPos + 20);
+                messageByteBuff.putLong(getQueueOffset(topic, queueId)); // update queueOffset
+                messageByteBuff.putLong(wroteOffset + totalMsgLen - msgLen); // update commitLog offset
+                putMessageContext.getPhyPos()[index++] = wroteOffset + totalMsgLen - msgLen;
+                msgNum++;
+                messageByteBuff.position(msgPos + msgLen);
+            }
+
+            messageByteBuff.position(0);
+            messageByteBuff.limit(totalMsgLen);
+            byteBuffer.put(messageByteBuff);
+            messageExtBatch.setEncodedBuff(null);
+            AppendMessageResult result = new AppendMessageResult(AppendMessageStatus.PUT_OK, wroteOffset, totalMsgLen,
+                    msgIdSuppiler, messageExtBatch.getStoreTimestamp(), 0,
+                    CommitLog.this.defaultMessageStore.now() - beginTimeMills);
+            result.setMsgNum(msgNum);
+            return result;
+        }
+
+        private long getQueueOffset(String topic, int queueId) {
+            keyBuilder.setLength(0);
+            keyBuilder.append(topic);
+            keyBuilder.append('-');
+            keyBuilder.append(queueId);
+            String key = keyBuilder.toString();
+            Long queueOffset = CommitLog.this.topicQueueTable.get(key);
+            if (null == queueOffset) {
+                queueOffset = 0L;
+            }
+
+            CommitLog.this.topicQueueTable.put(key, queueOffset + 1);
+            return queueOffset;
         }
 
         private void resetByteBuffer(final ByteBuffer byteBuffer, final int limit) {
@@ -1595,7 +1693,18 @@ public class CommitLog {
                 int propertiesPos = messagesByteBuff.position();
                 messagesByteBuff.position(propertiesPos + propertiesLen);
 
-                final byte[] topicData = messageExtBatch.getTopic().getBytes(MessageDecoder.CHARSET_UTF8);
+                byte[] topicData;
+                int queueId;
+                int index = 0;
+                if (messageExtBatch.isMultiTopic()) {
+                    // 7. index
+                    index = messagesByteBuff.getInt();
+                    topicData = messageExtBatch.getTopics()[index].getBytes(MessageDecoder.CHARSET_UTF8);
+                    queueId = messageExtBatch.getQueueIds()[index];
+                } else {
+                    topicData = messageExtBatch.getTopic().getBytes(MessageDecoder.CHARSET_UTF8);
+                    queueId = messageExtBatch.getQueueId();
+                }
 
                 final int topicLength = topicData.length;
 
@@ -1622,11 +1731,11 @@ public class CommitLog {
                 // 3 BODYCRC
                 this.encoderBuffer.putInt(bodyCrc);
                 // 4 QUEUEID
-                this.encoderBuffer.putInt(messageExtBatch.getQueueId());
+                this.encoderBuffer.putInt(queueId);
                 // 5 FLAG
                 this.encoderBuffer.putInt(flag);
                 // 6 QUEUEOFFSET
-                this.encoderBuffer.putLong(0);
+                this.encoderBuffer.putLong(index);
                 // 7 PHYSICALOFFSET
                 this.encoderBuffer.putLong(0);
                 // 8 SYSFLAG

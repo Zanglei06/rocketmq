@@ -38,34 +38,34 @@ public class MessageBatchTest {
     @Test
     public void testGenerate_OK() throws Exception {
         List<Message> messages = generateMessages();
-        MessageBatch.generateFromList(messages);
+        MessageBatch.generateFromList(messages, false);
     }
 
     @Test(expected = UnsupportedOperationException.class)
     public void testGenerate_DiffTopic() throws Exception {
         List<Message> messages = generateMessages();
         messages.get(1).setTopic("topic2");
-        MessageBatch.generateFromList(messages);
+        MessageBatch.generateFromList(messages, false);
     }
 
     @Test(expected = UnsupportedOperationException.class)
     public void testGenerate_DiffWaitOK() throws Exception {
         List<Message> messages = generateMessages();
         messages.get(1).setWaitStoreMsgOK(false);
-        MessageBatch.generateFromList(messages);
+        MessageBatch.generateFromList(messages, false);
     }
 
     @Test(expected = UnsupportedOperationException.class)
     public void testGenerate_Delay() throws Exception {
         List<Message> messages = generateMessages();
         messages.get(1).setDelayTimeLevel(1);
-        MessageBatch.generateFromList(messages);
+        MessageBatch.generateFromList(messages, false);
     }
 
     @Test(expected = UnsupportedOperationException.class)
     public void testGenerate_Retry() throws Exception {
         List<Message> messages = generateMessages();
         messages.get(1).setTopic(MixAll.RETRY_GROUP_TOPIC_PREFIX + "topic");
-        MessageBatch.generateFromList(messages);
+        MessageBatch.generateFromList(messages, false);
     }
 }

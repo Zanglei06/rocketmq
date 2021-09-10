@@ -17,12 +17,12 @@
 package org.apache.rocketmq.broker.processor;
 
 import java.net.SocketAddress;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
-import io.netty.channel.ChannelHandlerContext;
 import org.apache.rocketmq.broker.BrokerController;
 import org.apache.rocketmq.broker.mqtrace.ConsumeMessageContext;
 import org.apache.rocketmq.broker.mqtrace.ConsumeMessageHook;
@@ -56,6 +56,8 @@ import org.apache.rocketmq.store.MessageExtBrokerInner;
 import org.apache.rocketmq.store.PutMessageResult;
 import org.apache.rocketmq.store.config.StorePathConfigHelper;
 import org.apache.rocketmq.store.stats.BrokerStatsManager;
+
+import io.netty.channel.ChannelHandlerContext;
 
 public class SendMessageProcessor extends AbstractSendMessageProcessor implements NettyRequestProcessor {
 
@@ -565,6 +567,14 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
             return CompletableFuture.completedFuture(response);
         }
 
+        String[] topics = null;
+        int[] queueIds = null;
+        if (requestHeader.isMultiTopic()) {
+            topics = requestHeader.getTopic().split(MixAll.BATCH_TOPIC_SPLITTER);
+            requestHeader.setTopic(topics[0]);
+            queueIds = Arrays.stream(requestHeader.getQueueIds().split(MixAll.BATCH_QUEUE_ID_SPLITTER)).mapToInt(Integer::parseInt).toArray();
+        }
+
         int queueIdInt = requestHeader.getQueueId();
         TopicConfig topicConfig = this.brokerController.getTopicConfigManager().selectTopicConfig(requestHeader.getTopic());
 
@@ -581,6 +591,11 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         MessageExtBatch messageExtBatch = new MessageExtBatch();
         messageExtBatch.setTopic(requestHeader.getTopic());
         messageExtBatch.setQueueId(queueIdInt);
+        if (topics != null) {
+            messageExtBatch.setMultiTopic(true);
+            messageExtBatch.setTopics(topics);
+            messageExtBatch.setQueueIds(queueIds);
+        }
 
         int sysFlag = requestHeader.getSysFlag();
         if (TopicFilterType.MULTI_TAG == topicConfig.getTopicFilterType()) {
@@ -601,8 +616,6 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         CompletableFuture<PutMessageResult> putMessageResult = this.brokerController.getMessageStore().asyncPutMessages(messageExtBatch);
         return handlePutMessageResultFuture(putMessageResult, response, request, messageExtBatch, responseHeader, mqtraceContext, ctx, queueIdInt);
     }
-
-
 
     public boolean hasConsumeMessageHook() {
         return consumeMessageHookList != null && !this.consumeMessageHookList.isEmpty();

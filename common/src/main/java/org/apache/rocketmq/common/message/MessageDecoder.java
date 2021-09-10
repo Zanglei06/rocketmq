@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+
 import org.apache.rocketmq.common.UtilAll;
 import org.apache.rocketmq.common.sysflag.MessageSysFlag;
 
@@ -471,7 +472,7 @@ public class MessageDecoder {
         return map;
     }
 
-    public static byte[] encodeMessage(Message message) {
+    public static byte[] encodeMessage(Message message, boolean multiTopic, Map<String, Integer> topicIndex) {
         //only need flag, body, properties
         byte[] body = message.getBody();
         int bodyLen = body.length;
@@ -485,7 +486,8 @@ public class MessageDecoder {
             + 4 // 3 BODYCRC
             + 4 // 4 FLAG
             + 4 + bodyLen // 4 BODY
-            + 2 + propertiesLength;
+            + 2 + propertiesLength
+            + (multiTopic ? 4 : 0); // index.
         ByteBuffer byteBuffer = ByteBuffer.allocate(storeSize);
         // 1 TOTALSIZE
         byteBuffer.putInt(storeSize);
@@ -508,6 +510,10 @@ public class MessageDecoder {
         byteBuffer.putShort(propertiesLength);
         byteBuffer.put(propertiesBytes);
 
+        // 7. topic_index.
+        if (multiTopic) {
+            byteBuffer.putInt(topicIndex.get(message.getTopic()));
+        }
         return byteBuffer.array();
     }
 
@@ -542,12 +548,30 @@ public class MessageDecoder {
         return message;
     }
 
+    public static byte[] encodeMultiTopicMessages(List<Message> messages, Map<String, Integer> map) { // merge dup
+        //TO DO refactor, accumulate in one buffer, avoid copies
+        List<byte[]> encodedMessages = new ArrayList<byte[]>(messages.size());
+        int allSize = 0;
+        for (Message message : messages) {
+            byte[] tmp = encodeMessage(message, true, map);
+            encodedMessages.add(tmp);
+            allSize += tmp.length;
+        }
+        byte[] allBytes = new byte[allSize];
+        int pos = 0;
+        for (byte[] bytes : encodedMessages) {
+            System.arraycopy(bytes, 0, allBytes, pos, bytes.length);
+            pos += bytes.length;
+        }
+        return allBytes;
+    }
+
     public static byte[] encodeMessages(List<Message> messages) {
         //TO DO refactor, accumulate in one buffer, avoid copies
         List<byte[]> encodedMessages = new ArrayList<byte[]>(messages.size());
         int allSize = 0;
         for (Message message : messages) {
-            byte[] tmp = encodeMessage(message);
+            byte[] tmp = encodeMessage(message, false, null);
             encodedMessages.add(tmp);
             allSize += tmp.length;
         }

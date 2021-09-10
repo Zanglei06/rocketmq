@@ -82,6 +82,8 @@ public class MixAll {
     public static final String CID_SYS_RMQ_TRANS = "CID_RMQ_SYS_TRANS";
     public static final String ACL_CONF_TOOLS_FILE = "/conf/tools.yml";
     public static final String REPLY_MESSAGE_FLAG = "reply";
+    public static final String BATCH_TOPIC_SPLITTER = "%%";
+    public static final String BATCH_QUEUE_ID_SPLITTER = ",";
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.COMMON_LOGGER_NAME);
 
     public static String getWSAddr() {

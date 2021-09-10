@@ -16,12 +16,16 @@
  */
 package org.apache.rocketmq.client.impl.producer;
 
+import static org.apache.rocketmq.client.common.ClientErrorCode.NOT_FOUND_MULTI_TOPIC_EXCEPTION;
+
 import java.io.IOException;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
@@ -36,6 +40,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+
 import org.apache.rocketmq.client.QueryResult;
 import org.apache.rocketmq.client.Validators;
 import org.apache.rocketmq.client.common.ClientErrorCode;
@@ -548,6 +553,31 @@ public class DefaultMQProducerImpl implements MQProducerInner {
 
     }
 
+    public MessageQueue selectOnMessageQueue(MessageBatch message, final Map<String, TopicPublishInfo> tpInfoMap, final String lastBrokerName)
+            throws MQClientException {
+        //TO DO improve
+        Map<String, Integer> queueIdMap = new HashMap<>(tpInfoMap.size());
+        Map.Entry<String, TopicPublishInfo> firstEntry = tpInfoMap.entrySet().stream().findFirst().get();
+        MessageQueue messageQueue = firstEntry.getValue().selectOneMessageQueue(lastBrokerName); // select broker using first topic
+        String brokerName = messageQueue.getBrokerName();
+
+        queueIdMap.put(firstEntry.getKey(), messageQueue.getQueueId());
+
+        for (Map.Entry<String, TopicPublishInfo> entry : tpInfoMap.entrySet()) {
+            if (entry.getKey().equals(firstEntry.getKey())) {
+                continue; // selected, ignore it.
+            }
+            MessageQueue mq = entry.getValue().selectOneMessageQueueByBrokerName(brokerName); // select with brokerName
+            if (mq == null) {
+                throw new MQClientException(ClientErrorCode.NOT_FOUND_MULTI_TOPIC_EXCEPTION, "multi topic batch route not found");
+            }
+            queueIdMap.put(entry.getKey(), mq.getQueueId());
+        }
+
+        message.setQueueIdMap(queueIdMap);
+        return messageQueue;
+    }
+
     public MessageQueue selectOneMessageQueue(final TopicPublishInfo tpInfo, final String lastBrokerName) {
         return this.mqFaultStrategy.selectOneMessageQueue(tpInfo, lastBrokerName);
     }
@@ -577,8 +607,19 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         long beginTimestampFirst = System.currentTimeMillis();
         long beginTimestampPrev = beginTimestampFirst;
         long endTimestamp = beginTimestampFirst;
-        TopicPublishInfo topicPublishInfo = this.tryToFindTopicPublishInfo(msg.getTopic());
-        if (topicPublishInfo != null && topicPublishInfo.ok()) {
+
+        Map<String, TopicPublishInfo> topicPublishInfoMap = null;
+        TopicPublishInfo topicPublishInfo = null;
+        boolean multiTopic = false;
+        if (msg instanceof MessageBatch && ((MessageBatch) msg).isMultiTopic()) {
+            multiTopic = true;
+            MessageBatch messageBatch = (MessageBatch) msg;
+            topicPublishInfoMap = this.tryToFindTopicPublishInfo(messageBatch.getTopicIndexMap().keySet());
+        } else {
+            topicPublishInfo = this.tryToFindTopicPublishInfo(msg.getTopic());
+        }
+
+        if (multiTopic || (topicPublishInfo != null && topicPublishInfo.ok())) {
             boolean callTimeout = false;
             MessageQueue mq = null;
             Exception exception = null;
@@ -588,7 +629,12 @@ public class DefaultMQProducerImpl implements MQProducerInner {
             String[] brokersSent = new String[timesTotal];
             for (; times < timesTotal; times++) {
                 String lastBrokerName = null == mq ? null : mq.getBrokerName();
-                MessageQueue mqSelected = this.selectOneMessageQueue(topicPublishInfo, lastBrokerName);
+                MessageQueue mqSelected;
+                if (multiTopic) {
+                    mqSelected = this.selectOnMessageQueue((MessageBatch) msg, topicPublishInfoMap, lastBrokerName);
+                } else {
+                    mqSelected = this.selectOneMessageQueue(topicPublishInfo, lastBrokerName);
+                }
                 if (mqSelected != null) {
                     mq = mqSelected;
                     brokersSent[times] = mq.getBrokerName();
@@ -709,6 +755,18 @@ public class DefaultMQProducerImpl implements MQProducerInner {
             null).setResponseCode(ClientErrorCode.NOT_FOUND_TOPIC_EXCEPTION);
     }
 
+    public Map<String, TopicPublishInfo> tryToFindTopicPublishInfo(final Set<String> topics) throws MQClientException {
+        HashMap<String, TopicPublishInfo> topicPublishInfoMap = new HashMap<>(topics.size());
+        for (String topic : topics) {
+            TopicPublishInfo topicPublishInfo = tryToFindTopicPublishInfo(topic);
+            if (topicPublishInfo == null || !topicPublishInfo.ok()) {
+                throw new MQClientException(ClientErrorCode.NOT_FOUND_TOPIC_EXCEPTION, "topic route not found");
+            }
+            topicPublishInfoMap.put(topic, topicPublishInfo);
+        }
+        return topicPublishInfoMap;
+    }
+
     private TopicPublishInfo tryToFindTopicPublishInfo(final String topic) {
         TopicPublishInfo topicPublishInfo = this.topicPublishInfoTable.get(topic);
         if (null == topicPublishInfo || !topicPublishInfo.ok()) {
@@ -814,6 +872,23 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                 requestHeader.setReconsumeTimes(0);
                 requestHeader.setUnitMode(this.isUnitMode());
                 requestHeader.setBatch(msg instanceof MessageBatch);
+
+                if (msg instanceof MessageBatch && ((MessageBatch) msg).isMultiTopic()) {
+                    Map<String, Integer> queueIdMap = ((MessageBatch) msg).getQueueIdMap();
+                    String topic = msg.getTopic();
+                    StringBuilder sb = new StringBuilder();
+                    int idx = 0;
+                    for (String s : topic.split(MixAll.BATCH_TOPIC_SPLITTER)) {
+                        if (idx != 0) {
+                            sb.append(MixAll.BATCH_QUEUE_ID_SPLITTER);
+                        }
+                        sb.append(queueIdMap.get(s));
+                        idx++;
+                    }
+                    requestHeader.setMultiTopic(true);
+                    requestHeader.setQueueIds(sb.toString());
+                }
+
                 if (requestHeader.getTopic().startsWith(MixAll.RETRY_GROUP_TOPIC_PREFIX)) {
                     String reconsumeTimes = MessageAccessor.getReconsumeTime(msg);
                     if (reconsumeTimes != null) {
