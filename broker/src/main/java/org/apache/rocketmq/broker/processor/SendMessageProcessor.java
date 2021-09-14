@@ -570,9 +570,20 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         String[] topics = null;
         int[] queueIds = null;
         if (requestHeader.isMultiTopic()) {
-            topics = requestHeader.getTopic().split(MixAll.BATCH_TOPIC_SPLITTER);
+            topics = requestHeader.getTopic().split(MixAll.BATCH_TOPIC_SPLITTER); // decode topics
+            if (requestHeader.getQueueIds() == null) {
+                queueIds = new int[topics.length];
+                for (int i = 0; i < topics.length; i++) {
+                    TopicConfig topicConfig = this.brokerController.getTopicConfigManager().selectTopicConfig(topics[i]);
+                    queueIds[i] = randomQueueId(topicConfig.getWriteQueueNums());
+                }
+            } else {
+                // decode queueIds
+                queueIds = Arrays.stream(requestHeader.getQueueIds().split(MixAll.BATCH_QUEUE_ID_SPLITTER)).mapToInt(Integer::parseInt).toArray();
+            }
             requestHeader.setTopic(topics[0]);
-            queueIds = Arrays.stream(requestHeader.getQueueIds().split(MixAll.BATCH_QUEUE_ID_SPLITTER)).mapToInt(Integer::parseInt).toArray();
+        } else {
+
         }
 
         int queueIdInt = requestHeader.getQueueId();
@@ -591,7 +602,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         MessageExtBatch messageExtBatch = new MessageExtBatch();
         messageExtBatch.setTopic(requestHeader.getTopic());
         messageExtBatch.setQueueId(queueIdInt);
-        if (topics != null) {
+        if (requestHeader.isMultiTopic()) {
             messageExtBatch.setMultiTopic(true);
             messageExtBatch.setTopics(topics);
             messageExtBatch.setQueueIds(queueIds);

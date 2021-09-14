@@ -112,7 +112,7 @@ public class MessageBatch extends Message implements Iterable<Message> {
         MessageBatch messageBatch = new MessageBatch(messageList, multiTopic);
 
         if (multiTopic) {
-            HashMap<String, Integer> map = new HashMap<>();
+            Map<String, Integer> topicIndexMap = new HashMap<>(topics.size());
 
             int index = 0;
             StringBuilder sb = new StringBuilder();
@@ -121,11 +121,11 @@ public class MessageBatch extends Message implements Iterable<Message> {
                     sb.append(MixAll.BATCH_TOPIC_SPLITTER);
                 }
                 sb.append(topic);
-                map.put(topic, index);
+                topicIndexMap.put(topic, index);
                 index++;
             }
             messageBatch.setTopic(sb.toString());
-            messageBatch.setTopicIndexMap(map);
+            messageBatch.setTopicIndexMap(topicIndexMap);
         } else {
             messageBatch.setTopic(first.getTopic());
         }

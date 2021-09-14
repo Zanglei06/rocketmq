@@ -485,9 +485,9 @@ public class MessageDecoder {
             + 4 // 2 MAGICCOD
             + 4 // 3 BODYCRC
             + 4 // 4 FLAG
-            + 4 + bodyLen // 4 BODY
-            + 2 + propertiesLength
-            + (multiTopic ? 4 : 0); // index.
+            + 4 + bodyLen // 5 BODY
+            + 2 + propertiesLength // 6 PROPERTY
+            + (multiTopic ? 4 : 0); // 7 TOPIC_INDEX
         ByteBuffer byteBuffer = ByteBuffer.allocate(storeSize);
         // 1 TOTALSIZE
         byteBuffer.putInt(storeSize);
@@ -510,8 +510,8 @@ public class MessageDecoder {
         byteBuffer.putShort(propertiesLength);
         byteBuffer.put(propertiesBytes);
 
-        // 7. topic_index.
         if (multiTopic) {
+            // 7. topic_index.
             byteBuffer.putInt(topicIndex.get(message.getTopic()));
         }
         return byteBuffer.array();
@@ -548,12 +548,16 @@ public class MessageDecoder {
         return message;
     }
 
-    public static byte[] encodeMultiTopicMessages(List<Message> messages, Map<String, Integer> map) { // merge dup
+    public static byte[] encodeMultiTopicMessages(List<Message> messages, Map<String, Integer> map) {
+        return doEncodeMessages(messages, true, map);
+    }
+
+    private static byte[] doEncodeMessages(List<Message> messages, boolean multiTopic, Map<String, Integer> topicIndexMap) {
         //TO DO refactor, accumulate in one buffer, avoid copies
         List<byte[]> encodedMessages = new ArrayList<byte[]>(messages.size());
         int allSize = 0;
         for (Message message : messages) {
-            byte[] tmp = encodeMessage(message, true, map);
+            byte[] tmp = encodeMessage(message, multiTopic, topicIndexMap);
             encodedMessages.add(tmp);
             allSize += tmp.length;
         }
@@ -567,21 +571,7 @@ public class MessageDecoder {
     }
 
     public static byte[] encodeMessages(List<Message> messages) {
-        //TO DO refactor, accumulate in one buffer, avoid copies
-        List<byte[]> encodedMessages = new ArrayList<byte[]>(messages.size());
-        int allSize = 0;
-        for (Message message : messages) {
-            byte[] tmp = encodeMessage(message, false, null);
-            encodedMessages.add(tmp);
-            allSize += tmp.length;
-        }
-        byte[] allBytes = new byte[allSize];
-        int pos = 0;
-        for (byte[] bytes : encodedMessages) {
-            System.arraycopy(bytes, 0, allBytes, pos, bytes.length);
-            pos += bytes.length;
-        }
-        return allBytes;
+        return doEncodeMessages(messages, false, null);
     }
 
     public static List<Message> decodeMessages(ByteBuffer byteBuffer) throws Exception {
