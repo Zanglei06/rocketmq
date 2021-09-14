@@ -582,8 +582,6 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
                 queueIds = Arrays.stream(requestHeader.getQueueIds().split(MixAll.BATCH_QUEUE_ID_SPLITTER)).mapToInt(Integer::parseInt).toArray();
             }
             requestHeader.setTopic(topics[0]);
-        } else {
-
         }
 
         int queueIdInt = requestHeader.getQueueId();
