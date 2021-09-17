@@ -16,7 +16,6 @@
  */
 package org.apache.rocketmq.client.impl.producer;
 
-import static org.apache.rocketmq.client.common.ClientErrorCode.NOT_FOUND_MULTI_TOPIC_EXCEPTION;
 
 import java.io.IOException;
 import java.net.UnknownHostException;
@@ -40,6 +39,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 import org.apache.rocketmq.client.QueryResult;
 import org.apache.rocketmq.client.Validators;
@@ -91,6 +91,7 @@ import org.apache.rocketmq.common.protocol.ResponseCode;
 import org.apache.rocketmq.common.protocol.header.CheckTransactionStateRequestHeader;
 import org.apache.rocketmq.common.protocol.header.EndTransactionRequestHeader;
 import org.apache.rocketmq.common.protocol.header.SendMessageRequestHeader;
+import org.apache.rocketmq.common.protocol.route.BrokerData;
 import org.apache.rocketmq.common.sysflag.MessageSysFlag;
 import org.apache.rocketmq.common.utils.CorrelationIdUtil;
 import org.apache.rocketmq.logging.InternalLogger;
@@ -553,29 +554,49 @@ public class DefaultMQProducerImpl implements MQProducerInner {
 
     }
 
-    public MessageQueue selectOnMessageQueue(MessageBatch message, final Map<String, TopicPublishInfo> tpInfoMap, final String lastBrokerName)
+    public MessageQueue selectOneMessageQueue(MessageBatch message, final Map<String, TopicPublishInfo> tpInfoMap, final String lastBrokerName)
             throws MQClientException {
-        //TO DO improve
+        // select intersection brokerName first.
+        Set<String> sharedBrokers = null;
+        for (TopicPublishInfo tpi : tpInfoMap.values()) {
+            HashSet<String> brokers = new HashSet<>();
+            for (BrokerData brokerData : tpi.getTopicRouteData().getBrokerDatas()) {
+                brokers.add(brokerData.getBrokerName());
+            }
+            if (sharedBrokers == null) {
+                sharedBrokers = brokers;
+            } else {
+                sharedBrokers.retainAll(brokers);
+            }
+        }
+
+        if (sharedBrokers == null || sharedBrokers.isEmpty()) {
+            throw new MQClientException(ClientErrorCode.NOT_FOUND_MULTI_TOPIC_EXCEPTION, "multi topic batch route not found");
+        }
+
+        List<String> brokers = new ArrayList<>(sharedBrokers);
+        int index = random.nextInt(brokers.size());
+        String brokerName = brokers.get(index);
+        if (brokers.size() != 1 && brokerName.equals(lastBrokerName)) {
+            index++;
+            if (index == brokers.size()) {
+                index = 0;
+            }
+            brokerName = brokers.get(index);
+        }
+
         Map<String, Integer> queueIdMap = new HashMap<>(tpInfoMap.size());
-        Map.Entry<String, TopicPublishInfo> firstEntry = tpInfoMap.entrySet().stream().findFirst().get();
-        MessageQueue messageQueue = firstEntry.getValue().selectOneMessageQueue(lastBrokerName); // select broker using first topic
-        String brokerName = messageQueue.getBrokerName();
-
-        queueIdMap.put(firstEntry.getKey(), messageQueue.getQueueId());
-
+        String firstTopic = null;
         for (Map.Entry<String, TopicPublishInfo> entry : tpInfoMap.entrySet()) {
-            if (entry.getKey().equals(firstEntry.getKey())) {
-                continue; // selected, ignore it.
-            }
-            MessageQueue mq = entry.getValue().selectOneMessageQueueByBrokerName(brokerName); // select with brokerName
-            if (mq == null) {
-                throw new MQClientException(ClientErrorCode.NOT_FOUND_MULTI_TOPIC_EXCEPTION, "multi topic batch route not found");
-            }
+            MessageQueue mq = entry.getValue().selectOneMessageQueueByBrokerName(brokerName);
             queueIdMap.put(entry.getKey(), mq.getQueueId());
+            if (firstTopic == null) {
+                firstTopic = entry.getKey();
+            }
         }
 
         message.setQueueIdMap(queueIdMap);
-        return messageQueue;
+        return new MessageQueue(firstTopic, brokerName, 0); // only brokerName matters.
     }
 
     public MessageQueue selectOneMessageQueue(final TopicPublishInfo tpInfo, final String lastBrokerName) {
@@ -631,7 +652,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                 String lastBrokerName = null == mq ? null : mq.getBrokerName();
                 MessageQueue mqSelected;
                 if (multiTopic) {
-                    mqSelected = this.selectOnMessageQueue((MessageBatch) msg, topicPublishInfoMap, lastBrokerName);
+                    mqSelected = this.selectOneMessageQueue((MessageBatch) msg, topicPublishInfoMap, lastBrokerName);
                 } else {
                     mqSelected = this.selectOneMessageQueue(topicPublishInfo, lastBrokerName);
                 }
@@ -756,11 +777,12 @@ public class DefaultMQProducerImpl implements MQProducerInner {
     }
 
     public Map<String, TopicPublishInfo> tryToFindTopicPublishInfo(final Set<String> topics) throws MQClientException {
-        HashMap<String, TopicPublishInfo> topicPublishInfoMap = new HashMap<>(topics.size());
+        Map<String, TopicPublishInfo> topicPublishInfoMap = new HashMap<>(topics.size());
         for (String topic : topics) {
             TopicPublishInfo topicPublishInfo = tryToFindTopicPublishInfo(topic);
             if (topicPublishInfo == null || !topicPublishInfo.ok()) {
-                throw new MQClientException(ClientErrorCode.NOT_FOUND_TOPIC_EXCEPTION, "topic route not found");
+                throw new MQClientException("No route info of this topic: " + topic + FAQUrl.suggestTodo(FAQUrl.NO_TOPIC_ROUTE_INFO),
+                        null).setResponseCode(ClientErrorCode.NOT_FOUND_TOPIC_EXCEPTION);
             }
             topicPublishInfoMap.put(topic, topicPublishInfo);
         }

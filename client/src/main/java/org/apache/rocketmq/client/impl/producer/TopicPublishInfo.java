@@ -84,7 +84,7 @@ public class TopicPublishInfo {
         }
     }
 
-    public MessageQueue selectOneMessageQueueByBrokerName(final String brokerName) { // merge dup
+    public MessageQueue selectOneMessageQueueByBrokerName(final String brokerName) {
         for (int i = 0; i < this.messageQueueList.size(); i++) {
             int index = this.sendWhichQueue.incrementAndGet();
             int pos = Math.abs(index) % this.messageQueueList.size();
