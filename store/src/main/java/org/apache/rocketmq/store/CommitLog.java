@@ -1471,7 +1471,7 @@ public class CommitLog {
             int sysFlag = messageExtBatch.getSysFlag();
             int bornHostLength = (sysFlag & MessageSysFlag.BORNHOST_V6_FLAG) == 0 ? 4 + 4 : 16 + 4;
             int storeHostLength = (sysFlag & MessageSysFlag.STOREHOSTADDRESS_V6_FLAG) == 0 ? 4 + 4 : 16 + 4;
-            Supplier<String> msgIdSuppiler = () -> {
+            Supplier<String> msgIdSupplier = () -> {
                 int msgIdLen = storeHostLength + 8;
                 int batchCount = putMessageContext.getBatchSize();
                 long[] phyPosArray = putMessageContext.getPhyPos();
@@ -1508,7 +1508,7 @@ public class CommitLog {
                     messageByteBuff.reset();
                     byteBuffer.reset();
                     byteBuffer.put(this.msgStoreItemMemory.array(), 0, 8);
-                    return new AppendMessageResult(AppendMessageStatus.END_OF_FILE, wroteOffset, maxBlank, msgIdSuppiler, messageExtBatch.getStoreTimestamp(),
+                    return new AppendMessageResult(AppendMessageStatus.END_OF_FILE, wroteOffset, maxBlank, msgIdSupplier, messageExtBatch.getStoreTimestamp(),
                             0, CommitLog.this.defaultMessageStore.now() - beginTimeMills);
                 }
 
@@ -1532,7 +1532,7 @@ public class CommitLog {
             byteBuffer.put(messageByteBuff);
             messageExtBatch.setEncodedBuff(null);
             AppendMessageResult result = new AppendMessageResult(AppendMessageStatus.PUT_OK, wroteOffset, totalMsgLen,
-                    msgIdSuppiler, messageExtBatch.getStoreTimestamp(), 0,
+                    msgIdSupplier, messageExtBatch.getStoreTimestamp(), 0,
                     CommitLog.this.defaultMessageStore.now() - beginTimeMills);
             result.setMsgNum(msgNum);
             return result;
