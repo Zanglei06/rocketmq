@@ -113,7 +113,6 @@ public class MessageBatch extends Message implements Iterable<Message> {
 
         if (multiTopic) {
             Map<String, Integer> topicIndexMap = new HashMap<>(topics.size());
-
             int index = 0;
             StringBuilder sb = new StringBuilder();
             for (String topic : topics) {

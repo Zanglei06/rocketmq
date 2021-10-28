@@ -589,6 +589,9 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         String firstTopic = null;
         for (Map.Entry<String, TopicPublishInfo> entry : tpInfoMap.entrySet()) {
             MessageQueue mq = entry.getValue().selectOneMessageQueueByBrokerName(brokerName);
+            if (mq == null) {
+                throw new MQClientException(ClientErrorCode.NOT_FOUND_MULTI_TOPIC_EXCEPTION, "multi topic batch route not found");
+            }
             queueIdMap.put(entry.getKey(), mq.getQueueId());
             if (firstTopic == null) {
                 firstTopic = entry.getKey();
