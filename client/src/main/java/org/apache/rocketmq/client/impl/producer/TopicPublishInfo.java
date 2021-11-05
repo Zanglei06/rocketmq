@@ -18,6 +18,8 @@ package org.apache.rocketmq.client.impl.producer;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
+
 import org.apache.rocketmq.client.common.ThreadLocalIndex;
 import org.apache.rocketmq.common.message.MessageQueue;
 import org.apache.rocketmq.common.protocol.route.QueueData;
@@ -82,6 +84,24 @@ public class TopicPublishInfo {
             }
             return selectOneMessageQueue();
         }
+    }
+
+    public MessageQueue selectOneMessageQueueByBrokerName(final String brokerName) {
+        if (this.messageQueueList == null) {
+            return null;
+        }
+        List<MessageQueue> messageQueues = this.messageQueueList.stream()
+                .filter(mq -> mq.getBrokerName().equals(brokerName))
+                .collect(Collectors.toList());
+        if (messageQueues.isEmpty()) {
+            return null;
+        }
+
+        int index = this.sendWhichQueue.incrementAndGet();
+        int pos = Math.abs(index) % messageQueues.size();
+        if (pos < 0)
+            pos = 0;
+        return messageQueues.get(pos);
     }
 
     public MessageQueue selectOneMessageQueue() {
