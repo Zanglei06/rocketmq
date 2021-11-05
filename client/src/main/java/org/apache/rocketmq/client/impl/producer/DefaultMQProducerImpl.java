@@ -576,7 +576,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         List<String> brokers = new ArrayList<>(sharedBrokers);
         int index = random.nextInt(brokers.size());
         String brokerName = brokers.get(index);
-        if (brokers.size() != 1 && brokerName.equals(lastBrokerName)) {
+        if (lastBrokerName != null && brokers.size() != 1 && brokerName.equals(lastBrokerName)) {
             index++;
             if (index == brokers.size()) {
                 index = 0;
