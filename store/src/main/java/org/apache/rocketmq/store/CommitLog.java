@@ -1512,27 +1512,22 @@ public class CommitLog {
                 return buffer.toString();
             };
 
+            if (messageExtBatch.getStoreSize() + END_FILE_MIN_BLANK_LENGTH > maxBlank) {
+                this.msgStoreItemMemory.clear();
+                this.msgStoreItemMemory.putInt(maxBlank);
+                this.msgStoreItemMemory.putInt(CommitLog.BLANK_MAGIC_CODE);
+                messageByteBuff.reset();
+                byteBuffer.reset();
+                byteBuffer.put(this.msgStoreItemMemory.array(), 0, 8);
+                return new AppendMessageResult(AppendMessageStatus.END_OF_FILE, wroteOffset, maxBlank, msgIdSupplier, messageExtBatch.getStoreTimestamp(),
+                        0, CommitLog.this.defaultMessageStore.now() - beginTimeMills);
+            }
+
             int index = 0;
             while (messageByteBuff.hasRemaining()) {
                 final int msgPos = messageByteBuff.position();
                 final int msgLen = messageByteBuff.getInt();
-                final int bodyLen = msgLen - 40; // for log only.
-                if (msgLen > this.maxMessageSize) {
-                    CommitLog.log.warn("message size exceeded, msg total size: " + msgLen + ", msg body size: " + bodyLen
-                            + ", maxMessageSize: " + this.maxMessageSize);
-                    return new AppendMessageResult(AppendMessageStatus.MESSAGE_SIZE_EXCEEDED);
-                }
                 totalMsgLen += msgLen;
-                if (totalMsgLen + END_FILE_MIN_BLANK_LENGTH > maxBlank) {
-                    this.msgStoreItemMemory.clear();
-                    this.msgStoreItemMemory.putInt(maxBlank);
-                    this.msgStoreItemMemory.putInt(CommitLog.BLANK_MAGIC_CODE);
-                    messageByteBuff.reset();
-                    byteBuffer.reset();
-                    byteBuffer.put(this.msgStoreItemMemory.array(), 0, 8);
-                    return new AppendMessageResult(AppendMessageStatus.END_OF_FILE, wroteOffset, maxBlank, msgIdSupplier, messageExtBatch.getStoreTimestamp(),
-                            0, CommitLog.this.defaultMessageStore.now() - beginTimeMills);
-                }
 
                 messageByteBuff.position(msgPos + 12); // move to queueId
                 int queueId = messageByteBuff.getInt();
@@ -1795,6 +1790,7 @@ public class CommitLog {
             putMessageContext.setBatchSize(batchSize);
             putMessageContext.setPhyPos(new long[batchSize]);
             encoderBuffer.flip();
+            messageExtBatch.setStoreSize(maxMessageSize);
             return encoderBuffer;
         }
 
